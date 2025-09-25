@@ -1,5 +1,8 @@
 using Azure.Messaging.EventGrid;
 using Azure.Messaging.ServiceBus;
+using Azure.Extensions.AspNetCore.Configuration.Secrets;
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
 using AspNetCoreRateLimit;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -19,6 +22,14 @@ using System.Text;
 using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configure Azure Key Vault (only if running in Azure or when KeyVaultUri is configured)
+var keyVaultUri = builder.Configuration["AzureKeyVault:VaultUri"];
+if (!string.IsNullOrEmpty(keyVaultUri))
+{
+    var secretClient = new SecretClient(new Uri(keyVaultUri), new DefaultAzureCredential());
+    builder.Configuration.AddAzureKeyVault(secretClient, new KeyVaultSecretManager());
+}
 
 // Configure Serilog
 Log.Logger = new LoggerConfiguration()
@@ -68,7 +79,15 @@ builder.Services.Configure<JwtOptions>(
 // Register Azure clients
 builder.Services.AddSingleton<ServiceBusClient>(provider =>
 {
-    var connectionString = builder.Configuration.GetConnectionString("ServiceBus");
+    // Connection string will be loaded from Key Vault as "ServiceBus--ConnectionString"
+    // The double dash (--) in the Key Vault secret name gets converted to colon (:) in configuration
+    var connectionString = builder.Configuration["ServiceBus:ConnectionString"];
+    
+    if (string.IsNullOrEmpty(connectionString))
+    {
+        throw new InvalidOperationException("ServiceBus connection string not found. Make sure the 'ServiceBus--ConnectionString' secret is configured in Azure Key Vault.");
+    }
+    
     return new ServiceBusClient(connectionString);
 });
 
