@@ -23,7 +23,7 @@ namespace PaymentProcessingAPI.Services
             IOptions<ServiceBusConfiguration> serviceBusConfig,
             ILogger<ServiceBusService> logger)
         {
-            _client = client; // Can be null in development mode
+            _client = client;
             _azureConfig = azureConfig.Value;
             _serviceBusConfig = serviceBusConfig.Value;
             _logger = logger;
@@ -62,7 +62,6 @@ namespace PaymentProcessingAPI.Services
 
         public async Task SendMessageAsync<T>(string queueName, T message) where T : class
         {
-            // Development mode - simulate message sending
             if (_client == null)
             {
                 _logger.LogWarning("Service Bus client not available. Simulating message send to queue {QueueName} in development mode", queueName);
@@ -76,7 +75,6 @@ namespace PaymentProcessingAPI.Services
                 
                 _logger.LogInformation("📨 [SIMULATED] Message to queue '{QueueName}':\n{MessageContent}", queueName, json);
                 
-                // Simulate async operation
                 await Task.Delay(100);
                 return;
             }
@@ -98,12 +96,10 @@ namespace PaymentProcessingAPI.Services
                     TimeToLive = TimeSpan.FromHours(24) // TTL de 24 horas
                 };
 
-                // Adicionar propriedades customizadas para roteamento e filtros
                 serviceBusMessage.ApplicationProperties["MessageType"] = typeof(T).Name;
                 serviceBusMessage.ApplicationProperties["CreatedAt"] = DateTimeOffset.UtcNow;
                 serviceBusMessage.ApplicationProperties["Version"] = "1.0";
 
-                // Se a mensagem tem TransactionId, usar como PartitionKey para garantir ordem
                 if (message.GetType().GetProperty("TransactionId")?.GetValue(message) is string transactionId)
                 {
                     serviceBusMessage.PartitionKey = transactionId;
@@ -122,7 +118,6 @@ namespace PaymentProcessingAPI.Services
 
         public async Task SendBatchMessagesAsync<T>(string queueName, IEnumerable<T> messages) where T : class
         {
-            // Development mode - simulate batch message sending
             if (_client == null)
             {
                 _logger.LogWarning("Service Bus client not available. Simulating batch message send to queue {QueueName} in development mode", queueName);
