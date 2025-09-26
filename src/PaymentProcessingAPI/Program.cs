@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using PaymentProcessingAPI.Configuration;
 using PaymentProcessingAPI.Configurations;
 using PaymentProcessingAPI.Infrastructure;
 using PaymentProcessingAPI.Infrastructure.Repositories;
@@ -20,15 +21,23 @@ using Serilog;
 using System.Reflection;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Configure Azure Key Vault (only if running in Azure or when KeyVaultUri is configured)
 var keyVaultUri = builder.Configuration["AzureKeyVault:VaultUri"];
-if (!string.IsNullOrEmpty(keyVaultUri))
+if (!string.IsNullOrWhiteSpace(keyVaultUri))
 {
-    var secretClient = new SecretClient(new Uri(keyVaultUri), new DefaultAzureCredential());
-    builder.Configuration.AddAzureKeyVault(secretClient, new KeyVaultSecretManager());
+    builder.Configuration.AddAzureKeyVault(
+        new Uri(keyVaultUri),
+        new DefaultAzureCredential(),
+        new AzureKeyVaultConfigurationOptions { ReloadInterval = TimeSpan.FromMinutes(5) }
+    );
+}
+else
+{
+    Log.Warning("AzureKeyVault:VaultUri n�o definido. Key Vault n�o ser� carregado.");
 }
 
 // Configure Serilog
@@ -67,6 +76,9 @@ builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 builder.Services.Configure<AzureServiceBusOptions>(
     builder.Configuration.GetSection(AzureServiceBusOptions.ConfigSectionName));
 
+builder.Services.Configure<ServiceBusConfiguration>(
+    builder.Configuration.GetSection("ServiceBusConfiguration"));
+
 builder.Services.Configure<AzureEventGridOptions>(
     builder.Configuration.GetSection(AzureEventGridOptions.ConfigSectionName));
 
@@ -76,19 +88,31 @@ builder.Services.Configure<PaymentGatewayOptions>(
 builder.Services.Configure<JwtOptions>(
     builder.Configuration.GetSection(JwtOptions.ConfigSectionName));
 
-// Register Azure clients
-builder.Services.AddSingleton<ServiceBusClient>(provider =>
+
+// Register Azure clients  
+builder.Services.AddSingleton(provider =>
 {
-    // Connection string will be loaded from Key Vault as "ServiceBus--ConnectionString"
-    // The double dash (--) in the Key Vault secret name gets converted to colon (:) in configuration
+    // Try to get connection string from Key Vault first (ServiceBus--ConnectionString -> ServiceBus:ConnectionString)
     var connectionString = builder.Configuration["ServiceBus:ConnectionString"];
-    
+
+    // In development, if Key Vault is not available, simulate with null
+    if (string.IsNullOrEmpty(connectionString) && builder.Environment.IsDevelopment())
+    {
+        var logger = provider.GetService<ILogger<Program>>();
+        logger?.LogWarning("Service Bus connection string not found in Key Vault. Running in development mode without Service Bus.");
+        return (ServiceBusClient)null!; // Explicit cast for development mode
+    }
+
     if (string.IsNullOrEmpty(connectionString))
     {
         throw new InvalidOperationException("ServiceBus connection string not found. Make sure the 'ServiceBus--ConnectionString' secret is configured in Azure Key Vault.");
     }
-    
-    return new ServiceBusClient(connectionString);
+
+    var options = new ServiceBusClientOptions
+    {
+        TransportType = ServiceBusTransportType.AmqpTcp
+    };
+    return new ServiceBusClient(connectionString, options);
 });
 
 builder.Services.AddSingleton<EventGridPublisherClient>(provider =>
@@ -105,6 +129,7 @@ builder.Services.AddScoped<IWebhookService, WebhookService>();
 builder.Services.AddScoped<IPaymentGatewayService, PaymentGatewayService>();
 builder.Services.AddScoped<IEventPublisherService, EventPublisherService>();
 builder.Services.AddScoped<IPaymentValidationService, PaymentValidationService>();
+builder.Services.AddSingleton<IServiceBusService, ServiceBusService>();
 
 // Configure HttpClient for PaymentGatewayService
 builder.Services.AddHttpClient<PaymentGatewayService>(client =>
@@ -167,40 +192,10 @@ builder.Services.AddSwaggerGen(c =>
     {
         Title = "Payment Processing API",
         Version = "v1",
-        Description = "A comprehensive payment processing API with Azure integration",
-        Contact = new OpenApiContact
-        {
-            Name = "Payment Team",
-            Email = "payment-team@company.com"
-        }
+        Description = "A comprehensive payment processing API with Azure integration"
     });
 
-    // Add JWT authentication to Swagger
-    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-    {
-        Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
-        Name = "Authorization",
-        In = ParameterLocation.Header,
-        Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
-    });
-
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement
-    {
-        {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                }
-            },
-            Array.Empty<string>()
-        }
-    });
-
-    // Include XML comments
+    // Include XML comments if available
     var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
     var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
     if (File.Exists(xmlPath))
@@ -216,8 +211,8 @@ var app = builder.Build();
 // Exception handling (should be first)
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
-// Request logging
-app.UseMiddleware<RequestLoggingMiddleware>();
+// Request logging - temporarily disabled for troubleshooting
+// app.UseMiddleware<RequestLoggingMiddleware>();
 
 // Security headers
 app.Use(async (context, next) =>
@@ -235,7 +230,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "Payment Processing API v1");
-        c.RoutePrefix = string.Empty; // Set Swagger UI at app's root
+        c.RoutePrefix = "swagger"; // Set Swagger UI at /swagger
     });
 }
 

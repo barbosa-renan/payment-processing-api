@@ -8,6 +8,11 @@ public class AzureServiceBusOptions
     public string PaymentQueue { get; set; } = "payment-queue";
     public string RefundQueue { get; set; } = "refund-queue";
     public string NotificationQueue { get; set; } = "notification-queue";
+    public string PaymentProcessedQueue { get; set; } = "payment-processed-queue";
+    public string PaymentFailedQueue { get; set; } = "payment-failed-queue";
+    public string NotificationsQueue { get; set; } = "notifications-queue";
+    public string RefundRequestsQueue { get; set; } = "refund-requests-queue";
+    public string HighValueApprovalQueue { get; set; } = "high-value-approval-queue";
 }
 
 public class AzureEventGridOptions
