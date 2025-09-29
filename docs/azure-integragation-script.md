@@ -114,22 +114,21 @@ az servicebus queue create --resource-group $resourceGroup --namespace-name $ser
 ### 3.1 Criar Event Grid Topic
 ```bash
 # Criar custom topic
-az eventgrid topic create \
-  --resource-group $resourceGroup \
-  --name $eventGridTopic \
-  --location brazilsouth
+az eventgrid topic create --resource-group $resourceGroup --name $eventGridTopic --location brazilsouth
 
 # Obter endpoint
-az eventgrid topic show \
-  --resource-group $resourceGroup \
-  --name $eventGridTopic \
-  --query "endpoint" -o tsv
+$eventGridTopicEndpoint=$(az eventgrid topic show --resource-group $resourceGroup --name $eventGridTopic --query "endpoint" -o tsv)
+
+# Salvar endpoint string como segredo
+# Dica: use nomes "hierárquicos" com duplo hífen para mapear para "seções" (EventGrid:Endpoint)
+az keyvault secret set -n EventGrid--Endpoint --vault-name $keyVaultName --value $eventGridTopicEndpoint
 
 # Obter access key
-az eventgrid topic key list \
-  --resource-group $resourceGroup \
-  --name $eventGridTopic \
-  --query "key1" -o tsv
+$eventGridTopicAccessKey=$(az eventgrid topic key list --resource-group $resourceGroup --name $eventGridTopic --query "key1" -o tsv)
+
+# Salvar access key string como segredo
+# Dica: use nomes "hierárquicos" com duplo hífen para mapear para "seções" (EventGrid:AccessKey)
+az keyvault secret set -n EventGrid--AccessKey --vault-name $keyVaultName --value $eventGridTopicAccessKey
 ```
 
 ### 3.2 Event Schemas Definidos
@@ -193,7 +192,7 @@ az eventgrid topic key list \
 ```
 
 **Tarefas a completar:**
-- [ ] Anotar endpoint e access key do Event Grid
+- [x] Anotar endpoint e access key do Event Grid
 - [ ] Implementar EventGridService na API
 - [ ] Criar eventos para diferentes cenários
 - [ ] Testar publicação de eventos
