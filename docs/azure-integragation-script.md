@@ -193,9 +193,9 @@ az keyvault secret set -n EventGrid--AccessKey --vault-name $keyVaultName --valu
 
 **Tarefas a completar:**
 - [x] Anotar endpoint e access key do Event Grid
-- [ ] Implementar EventGridService na API
-- [ ] Criar eventos para diferentes cenários
-- [ ] Testar publicação de eventos
+- [x] Implementar EventGridService na API
+- [x] Criar eventos para diferentes cenários
+- [x] Testar publicação de eventos
 - [ ] Configurar event subscriptions
 - [ ] Validar schemas dos eventos
 

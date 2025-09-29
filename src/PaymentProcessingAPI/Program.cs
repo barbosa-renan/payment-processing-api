@@ -1,9 +1,10 @@
-using Azure.Messaging.EventGrid;
-using Azure.Messaging.ServiceBus;
+using AspNetCoreRateLimit;
+using Azure;
 using Azure.Extensions.AspNetCore.Configuration.Secrets;
 using Azure.Identity;
+using Azure.Messaging.EventGrid;
+using Azure.Messaging.ServiceBus;
 using Azure.Security.KeyVault.Secrets;
-using AspNetCoreRateLimit;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -21,11 +22,6 @@ using Serilog;
 using System.Reflection;
 using System.Text;
 using System.Text.Json.Serialization;
-using System.Net;
-using Azure.Identity;
-using PaymentProcessingAPI.Configuration;
-using PaymentProcessingAPI.Services;
-using PaymentProcessingAPI.Services.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -48,6 +44,45 @@ Log.Logger = new LoggerConfiguration()
     .CreateLogger();
 
 builder.Host.UseSerilog();
+
+// PROBE: checa se as chaves do EventGrid chegaram via provider do KV
+string? egEndpoint = builder.Configuration["EventGrid:TopicEndpoint"];
+string? egKey = builder.Configuration["EventGrid:AccessKey"];
+
+Log.Information("KV probe - EventGrid:TopicEndpoint present={Present} len={Len}",
+    !string.IsNullOrWhiteSpace(egEndpoint), egEndpoint?.Length ?? 0);
+Log.Information("KV probe - EventGrid:AccessKey present={Present} len={Len}",
+    !string.IsNullOrWhiteSpace(egKey), egKey?.Length ?? 0);
+
+// Fallback: se não veio via provider, lê direto do KV e injeta no Configuration
+if ((string.IsNullOrWhiteSpace(egEndpoint) || string.IsNullOrWhiteSpace(egKey)) && !string.IsNullOrWhiteSpace(keyVaultUri))
+{
+    var credential = new DefaultAzureCredential();
+    var secretClient = new SecretClient(new Uri(keyVaultUri), credential);
+
+    try
+    {
+        var endpointSecret = await secretClient.GetSecretAsync("EventGrid--TopicEndpoint");
+        var keySecret = await secretClient.GetSecretAsync("EventGrid--AccessKey");
+
+        egEndpoint = endpointSecret.Value.Value;
+        egKey = keySecret.Value.Value;
+
+        if (!string.IsNullOrWhiteSpace(egEndpoint))
+            builder.Configuration["EventGrid:TopicEndpoint"] = egEndpoint;
+
+        if (!string.IsNullOrWhiteSpace(egKey))
+            builder.Configuration["EventGrid:AccessKey"] = egKey;
+
+        Log.Information("KV fallback aplicado - EventGrid secrets carregados via SecretClient.");
+    }
+    catch (Exception ex)
+    {
+        Log.Error(ex, "Falha ao carregar segredos do EventGrid diretamente do Key Vault.");
+    }
+}
+
+builder.Services.Configure<EventGridConfiguration>(builder.Configuration.GetSection("EventGrid"));
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
@@ -77,7 +112,7 @@ builder.Services.Configure<ServiceBusConfiguration>(
     builder.Configuration.GetSection("ServiceBusConfiguration"));
 
 builder.Services.Configure<AzureEventGridOptions>(
-    builder.Configuration.GetSection(AzureEventGridOptions.ConfigSectionName));
+    builder.Configuration.GetSection("EventGrid"));
 
 builder.Services.Configure<PaymentGatewayOptions>(
     builder.Configuration.GetSection(PaymentGatewayOptions.ConfigSectionName));
@@ -85,38 +120,36 @@ builder.Services.Configure<PaymentGatewayOptions>(
 builder.Services.Configure<JwtOptions>(
     builder.Configuration.GetSection(JwtOptions.ConfigSectionName));
 
-builder.Services.Configure<EventGridConfiguration>(
-    builder.Configuration.GetSection("EventGrid"));
-
- 
 builder.Services.AddSingleton(provider =>
 {
     var connectionString = builder.Configuration["ServiceBus:ConnectionString"];
-
     if (string.IsNullOrEmpty(connectionString) && builder.Environment.IsDevelopment())
     {
         var logger = provider.GetService<ILogger<Program>>();
-        logger?.LogWarning("Service Bus connection string not found in Key Vault. Running in development mode without Service Bus.");
-        return (ServiceBusClient)null!; // Explicit cast for development mode
+        logger?.LogWarning("Service Bus connection string not found. Running without Service Bus (dev).");
+        return (ServiceBusClient)null!;
     }
-
     if (string.IsNullOrEmpty(connectionString))
-    {
-        throw new InvalidOperationException("ServiceBus connection string not found. Make sure the 'ServiceBus--ConnectionString' secret is configured in Azure Key Vault.");
-    }
+        throw new InvalidOperationException("ServiceBus connection string not found. Configure 'ServiceBus--ConnectionString' no Key Vault.");
 
-    var options = new ServiceBusClientOptions
-    {
-        TransportType = ServiceBusTransportType.AmqpTcp
-    };
+    var options = new ServiceBusClientOptions { TransportType = ServiceBusTransportType.AmqpTcp };
     return new ServiceBusClient(connectionString, options);
 });
 
-builder.Services.AddSingleton<EventGridPublisherClient>(provider =>
+builder.Services.AddSingleton<EventGridPublisherClient>(sp =>
 {
-    var options = builder.Configuration.GetSection(AzureEventGridOptions.ConfigSectionName)
-        .Get<AzureEventGridOptions>();
-    return new EventGridPublisherClient(new Uri(options!.TopicEndpoint), new Azure.AzureKeyCredential(options.AccessKey));
+    var cfg = sp.GetRequiredService<IConfiguration>();
+    var endpoint = cfg["EventGrid:TopicEndpoint"];
+    var accessKey = cfg["EventGrid:AccessKey"];
+    if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(accessKey))
+        throw new InvalidOperationException("EventGrid endpoint/key ausentes.");
+
+    return new EventGridPublisherClient(new Uri(endpoint), new AzureKeyCredential(accessKey),
+        new EventGridPublisherClientOptions
+        {
+            Retry = { Mode = Azure.Core.RetryMode.Exponential, MaxRetries = 5,
+                      Delay = TimeSpan.FromMilliseconds(300), MaxDelay = TimeSpan.FromSeconds(5) }
+        });
 });
 
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
@@ -126,7 +159,7 @@ builder.Services.AddScoped<IPaymentGatewayService, PaymentGatewayService>();
 builder.Services.AddScoped<IEventPublisherService, EventPublisherService>();
 builder.Services.AddScoped<IPaymentValidationService, PaymentValidationService>();
 builder.Services.AddSingleton<IServiceBusService, ServiceBusService>();
-builder.Services.AddScoped<IEventGridService, EventGridService>();
+builder.Services.AddSingleton<IEventGridService, EventGridService>();
 
 builder.Services.AddHttpClient<PaymentGatewayService>(client =>
 {
@@ -189,17 +222,12 @@ builder.Services.AddSwaggerGen(c =>
     var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
     var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
     if (File.Exists(xmlPath))
-    {
         c.IncludeXmlComments(xmlPath);
-    }
 });
 
 var app = builder.Build();
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
-
-// Request logging - temporarily disabled for troubleshooting
-// app.UseMiddleware<RequestLoggingMiddleware>();
 
 app.Use(async (context, next) =>
 {
@@ -216,16 +244,16 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "Payment Processing API v1");
-        c.RoutePrefix = "swagger"; // Set Swagger UI at /swagger
+        c.RoutePrefix = "swagger";
     });
 }
 
 app.UseHttpsRedirection();
-
 app.UseCors();
 app.UseIpRateLimiting();
 app.UseAuthentication();
 app.UseAuthorization();
+
 app.MapHealthChecks("/health", new HealthCheckOptions
 {
     ResponseWriter = async (context, report) =>
@@ -264,6 +292,6 @@ using (var scope = app.Services.CreateScope())
 }
 
 Log.Information("Payment Processing API starting up");
-
 app.Run();
+
 public partial class Program { }
