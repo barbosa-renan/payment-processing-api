@@ -19,16 +19,19 @@ az group show --name rg-payment-processing
 ### 1.2 Configurar Variáveis de Ambiente
 ```powershell
 # Definir variáveis para reutilização
+### 1.2 Configurar Variáveis de Ambiente
+```powershell
+# Definir variáveis para reutilização
 $resourceGroup = "rg-payment-processing"
 $location = "brazilsouth"
 $appServicePlan = "asp-payment-api"
-$webAppName = "payment-api-$(Get-Random)"
+$webAppName = "payment-api-8530"
 $serviceBusNamespace = "sb-payment-processing-8530"
 $eventGridTopic = "payment-events-topic"
-$functionAppName = "func-payment-processor-$(Get-Random -Maximum 9999)"
-$storageAccount = "stpaymentproc$(Get-Random -Maximum 9999)"
+$functionAppName = "func-payment-processor-8530"
+$storageAccount = "stpaymentproc-8530"
 $logicAppName = "logic-payment-workflow"
-$sqlServerName = "sql-payment-$(Get-Random -Maximum 9999)"
+$sqlServerName = "sql-payment-8530"
 $databaseName = "PaymentDB"
 $keyVaultName = "kv-payment-api"
 ```
@@ -99,12 +102,12 @@ az servicebus queue create --resource-group $resourceGroup --namespace-name $ser
 ```
 
 **Tarefas a completar:**
-- [ ] Anotar a connection string do Service Bus
-- [ ] Implementar ServiceBusService na API
-- [ ] Testar envio de mensagens para cada fila
-- [ ] Configurar dead letter queues
-- [ ] Implementar retry policies
-- [ ] Testar cenários de falha
+- [x] Anotar a connection string do Service Bus
+- [x] Implementar ServiceBusService na API
+- [x] Testar envio de mensagens para cada fila
+- [x] Configurar dead letter queues
+- [x] Implementar retry policies
+- [x] Testar cenários de falha
 
 ## Fase 3: Event Grid
 
