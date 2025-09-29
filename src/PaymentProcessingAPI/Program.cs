@@ -54,7 +54,7 @@ Log.Information("KV probe - EventGrid:TopicEndpoint present={Present} len={Len}"
 Log.Information("KV probe - EventGrid:AccessKey present={Present} len={Len}",
     !string.IsNullOrWhiteSpace(egKey), egKey?.Length ?? 0);
 
-// Fallback: se não veio via provider, lê direto do KV e injeta no Configuration
+// Fallback: se nï¿½o veio via provider, lï¿½ direto do KV e injeta no Configuration
 if ((string.IsNullOrWhiteSpace(egEndpoint) || string.IsNullOrWhiteSpace(egKey)) && !string.IsNullOrWhiteSpace(keyVaultUri))
 {
     var credential = new DefaultAzureCredential();
