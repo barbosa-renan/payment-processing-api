@@ -22,10 +22,13 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Net;
+using Azure.Identity;
+using PaymentProcessingAPI.Configuration;
+using PaymentProcessingAPI.Services;
+using PaymentProcessingAPI.Services.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure Azure Key Vault (only if running in Azure or when KeyVaultUri is configured)
 var keyVaultUri = builder.Configuration["AzureKeyVault:VaultUri"];
 if (!string.IsNullOrWhiteSpace(keyVaultUri))
 {
@@ -37,17 +40,15 @@ if (!string.IsNullOrWhiteSpace(keyVaultUri))
 }
 else
 {
-    Log.Warning("AzureKeyVault:VaultUri n�o definido. Key Vault n�o ser� carregado.");
+    Log.Warning("AzureKeyVault:VaultUri nao definido. Key Vault nao sera carregado.");
 }
 
-// Configure Serilog
 Log.Logger = new LoggerConfiguration()
     .ReadFrom.Configuration(builder.Configuration)
     .CreateLogger();
 
 builder.Host.UseSerilog();
 
-// Add services to the container
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
@@ -55,11 +56,9 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
     });
 
-// Configure Entity Framework
 builder.Services.AddDbContext<PaymentDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Configure AutoMapper
 builder.Services.AddSingleton(provider =>
 {
     var configuration = new AutoMapper.MapperConfiguration(cfg =>
@@ -69,10 +68,8 @@ builder.Services.AddSingleton(provider =>
     return configuration.CreateMapper();
 });
 
-// Configure FluentValidation
 builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 
-// Configure Azure Services
 builder.Services.Configure<AzureServiceBusOptions>(
     builder.Configuration.GetSection(AzureServiceBusOptions.ConfigSectionName));
 
@@ -88,14 +85,14 @@ builder.Services.Configure<PaymentGatewayOptions>(
 builder.Services.Configure<JwtOptions>(
     builder.Configuration.GetSection(JwtOptions.ConfigSectionName));
 
+builder.Services.Configure<EventGridConfiguration>(
+    builder.Configuration.GetSection("EventGrid"));
 
-// Register Azure clients  
+ 
 builder.Services.AddSingleton(provider =>
 {
-    // Try to get connection string from Key Vault first (ServiceBus--ConnectionString -> ServiceBus:ConnectionString)
     var connectionString = builder.Configuration["ServiceBus:ConnectionString"];
 
-    // In development, if Key Vault is not available, simulate with null
     if (string.IsNullOrEmpty(connectionString) && builder.Environment.IsDevelopment())
     {
         var logger = provider.GetService<ILogger<Program>>();
@@ -122,7 +119,6 @@ builder.Services.AddSingleton<EventGridPublisherClient>(provider =>
     return new EventGridPublisherClient(new Uri(options!.TopicEndpoint), new Azure.AzureKeyCredential(options.AccessKey));
 });
 
-// Register application services
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IWebhookService, WebhookService>();
@@ -130,14 +126,13 @@ builder.Services.AddScoped<IPaymentGatewayService, PaymentGatewayService>();
 builder.Services.AddScoped<IEventPublisherService, EventPublisherService>();
 builder.Services.AddScoped<IPaymentValidationService, PaymentValidationService>();
 builder.Services.AddSingleton<IServiceBusService, ServiceBusService>();
+builder.Services.AddScoped<IEventGridService, EventGridService>();
 
-// Configure HttpClient for PaymentGatewayService
 builder.Services.AddHttpClient<PaymentGatewayService>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(30);
 });
 
-// Configure JWT Authentication
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.ConfigSectionName).Get<JwtOptions>();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -154,7 +149,6 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
-// Configure CORS
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(corsBuilder =>
@@ -172,19 +166,16 @@ builder.Services.AddCors(options =>
     });
 });
 
-// Configure Rate Limiting
 builder.Services.AddMemoryCache();
 builder.Services.Configure<IpRateLimitOptions>(builder.Configuration.GetSection("RateLimiting"));
 builder.Services.AddInMemoryRateLimiting();
 builder.Services.AddSingleton<IRateLimitConfiguration, RateLimitConfiguration>();
 
-// Configure Health Checks
 builder.Services.AddHealthChecks()
     .AddSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")!)
     .AddCheck("ServiceBus", () => Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Healthy("ServiceBus is healthy"))
     .AddCheck("EventGrid", () => Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Healthy("EventGrid is healthy"));
 
-// Configure Swagger/OpenAPI
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -195,7 +186,6 @@ builder.Services.AddSwaggerGen(c =>
         Description = "A comprehensive payment processing API with Azure integration"
     });
 
-    // Include XML comments if available
     var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
     var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
     if (File.Exists(xmlPath))
@@ -206,15 +196,11 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline
-
-// Exception handling (should be first)
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // Request logging - temporarily disabled for troubleshooting
 // app.UseMiddleware<RequestLoggingMiddleware>();
 
-// Security headers
 app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
@@ -237,15 +223,9 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 app.UseCors();
-
-// Rate limiting
 app.UseIpRateLimiting();
-
-// Authentication & Authorization
 app.UseAuthentication();
 app.UseAuthorization();
-
-// Health checks
 app.MapHealthChecks("/health", new HealthCheckOptions
 {
     ResponseWriter = async (context, report) =>
@@ -269,7 +249,6 @@ app.MapHealthChecks("/health", new HealthCheckOptions
 
 app.MapControllers();
 
-// Ensure database is created
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<PaymentDbContext>();
@@ -287,6 +266,4 @@ using (var scope = app.Services.CreateScope())
 Log.Information("Payment Processing API starting up");
 
 app.Run();
-
-// Make Program accessible for integration tests
 public partial class Program { }
