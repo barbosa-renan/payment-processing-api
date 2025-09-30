@@ -45,16 +45,9 @@ Log.Logger = new LoggerConfiguration()
 
 builder.Host.UseSerilog();
 
-// PROBE: checa se as chaves do EventGrid chegaram via provider do KV
 string? egEndpoint = builder.Configuration["EventGrid:TopicEndpoint"];
 string? egKey = builder.Configuration["EventGrid:AccessKey"];
 
-Log.Information("KV probe - EventGrid:TopicEndpoint present={Present} len={Len}",
-    !string.IsNullOrWhiteSpace(egEndpoint), egEndpoint?.Length ?? 0);
-Log.Information("KV probe - EventGrid:AccessKey present={Present} len={Len}",
-    !string.IsNullOrWhiteSpace(egKey), egKey?.Length ?? 0);
-
-// Fallback: se n�o veio via provider, l� direto do KV e injeta no Configuration
 if ((string.IsNullOrWhiteSpace(egEndpoint) || string.IsNullOrWhiteSpace(egKey)) && !string.IsNullOrWhiteSpace(keyVaultUri))
 {
     var credential = new DefaultAzureCredential();
@@ -73,8 +66,6 @@ if ((string.IsNullOrWhiteSpace(egEndpoint) || string.IsNullOrWhiteSpace(egKey)) 
 
         if (!string.IsNullOrWhiteSpace(egKey))
             builder.Configuration["EventGrid:AccessKey"] = egKey;
-
-        Log.Information("KV fallback aplicado - EventGrid secrets carregados via SecretClient.");
     }
     catch (Exception ex)
     {
