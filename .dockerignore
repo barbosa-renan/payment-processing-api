@@ -1,0 +1,65 @@
+# .dockerignore - Exclui arquivos desnecessários do contexto de build
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Visual Studio
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build results
+**/bin/
+**/obj/
+**/out/
+**/logs/
+
+# Packages
+**/packages/
+*.nupkg
+*.snupkg
+
+# Runtime files
+*.log
+*.tmp
+*.temp
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Documentation
+*.md
+docs/
+
+# Testing
+**/TestResults/
+**/coverage/
+
+# Node.js (se houver)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+.env.production

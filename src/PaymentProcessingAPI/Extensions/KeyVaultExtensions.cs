@@ -12,11 +12,30 @@ public static class KeyVaultExtensions
         var keyVaultUri = builder.Configuration["AzureKeyVault:VaultUri"];
         if (!string.IsNullOrWhiteSpace(keyVaultUri))
         {
-            builder.Configuration.AddAzureKeyVault(
-                new Uri(keyVaultUri),
-                new DefaultAzureCredential(),
-                new AzureKeyVaultConfigurationOptions { ReloadInterval = TimeSpan.FromMinutes(5) }
-            );
+            try
+            {
+                var credential = GetAzureCredential(builder.Configuration);
+                
+                builder.Configuration.AddAzureKeyVault(
+                    new Uri(keyVaultUri),
+                    credential,
+                    new AzureKeyVaultConfigurationOptions 
+                    { 
+                        ReloadInterval = TimeSpan.FromMinutes(5)
+                    }
+                );
+                
+                Log.Information("Azure Key Vault configurado com sucesso: {VaultUri}", keyVaultUri);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Erro ao configurar Azure Key Vault: {VaultUri}", keyVaultUri);
+                // Em desenvolvimento, continua sem Key Vault
+                if (builder.Environment.IsProduction())
+                {
+                    throw;
+                }
+            }
         }
         else
         {
@@ -24,6 +43,25 @@ public static class KeyVaultExtensions
         }
 
         return builder;
+    }
+    
+    private static Azure.Core.TokenCredential GetAzureCredential(IConfiguration configuration)
+    {
+        // Priorizar Managed Identity em produção
+        var clientId = configuration["AZURE_CLIENT_ID"];
+        var clientSecret = configuration["AZURE_CLIENT_SECRET"];
+        var tenantId = configuration["AZURE_TENANT_ID"];
+        
+        if (!string.IsNullOrWhiteSpace(clientId) && 
+            !string.IsNullOrWhiteSpace(clientSecret) && 
+            !string.IsNullOrWhiteSpace(tenantId))
+        {
+            Log.Information("Usando ClientSecretCredential para autenticação no Key Vault");
+            return new ClientSecretCredential(tenantId, clientId, clientSecret);
+        }
+        
+        Log.Information("Usando DefaultAzureCredential para autenticação no Key Vault");
+        return new DefaultAzureCredential();
     }
 
     public static async Task<WebApplicationBuilder> LoadEventGridSecretsAsync(this WebApplicationBuilder builder)

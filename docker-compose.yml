@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  # Aplicação Payment Processing API
+  payment-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: payment-processing-api
+    ports:
+      - "5000:8080"  # HTTP
+      - "5001:8081"  # HTTPS
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Docker
+      - ASPNETCORE_URLS=http://+:8080;https://+:8081
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=PaymentProcessingDB;User Id=sa;Password=${DB_SA_PASSWORD};TrustServerCertificate=true;MultipleActiveResultSets=true
+      - ConnectionStrings__Redis=redis:6379
+      - AzureKeyVault__VaultUri=${AZURE_KEYVAULT_URI}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID}
+      - PaymentGateway__Environment=sandbox
+      - Jwt__Issuer=PaymentProcessingAPI
+      - Jwt__Audience=PaymentProcessingAPI-Clients
+    depends_on:
+      - sqlserver
+      - redis
+    networks:
+      - payment-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # SQL Server Database
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: payment-sqlserver
+    ports:
+      - "1433:1433"
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=${DB_SA_PASSWORD}
+      - MSSQL_PID=Express
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    networks:
+      - payment-network
+    restart: unless-stopped
+    healthcheck:
+      test: /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${DB_SA_PASSWORD}" -Q "SELECT 1" -b -o /dev/null
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: payment-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - payment-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Seq para logs (opcional)
+  seq:
+    image: datalust/seq:latest
+    container_name: payment-seq
+    ports:
+      - "5341:80"
+    environment:
+      - ACCEPT_EULA=Y
+    volumes:
+      - seq_data:/data
+    networks:
+      - payment-network
+    restart: unless-stopped
+
+volumes:
+  sqlserver_data:
+    driver: local
+  redis_data:
+    driver: local
+  seq_data:
+    driver: local
+
+networks:
+  payment-network:
+    driver: bridge
